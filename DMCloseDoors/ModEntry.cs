@@ -2,10 +2,8 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Xml;
 using UnityEngine;
 using UnityEngine.Scripting;
 
@@ -16,178 +14,270 @@ public class DMCloseDoors_ModApi : IModApi
     {
         Debug.Log("[DMCloseDoors] InitMod");
 
-        DMCloseDoors.LoadConfig(_modInstance);
-
         var harmony = new Harmony("DMCloseDoors");
         harmony.PatchAll(Assembly.GetExecutingAssembly());
+
+        Debug.Log("[DMCloseDoors] Harmony patches applied");
     }
 }
 
 internal static class DMCloseDoors
 {
-    // Only config we care about
-    public static float TraderDoorResetIntervalSeconds = 5f;
+    public static bool EnableInTraders = true;
+    public static bool DebugLog = false;
 
     private static readonly BindingFlags AnyInstance =
         BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
-    public static void LoadConfig(Mod modInstance)
-    {
-        try
-        {
-            string modPath = GetModPath(modInstance);
-            string configPath = Path.Combine(modPath, "Config.xml");
-
-            if (!File.Exists(configPath))
-            {
-                Debug.Log("[DMCloseDoors] Config.xml not found, using default (5s)");
-                ApplyBounds();
-                return;
-            }
-
-            var doc = new XmlDocument();
-            doc.Load(configPath);
-
-            var node = doc.SelectSingleNode("/DMCloseDoors/TraderDoorResetIntervalSeconds");
-            if (node?.Attributes?["value"] != null)
-            {
-                if (float.TryParse(node.Attributes["value"].Value,
-                    System.Globalization.NumberStyles.Float,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out float val))
-                {
-                    TraderDoorResetIntervalSeconds = val;
-                }
-            }
-
-            ApplyBounds();
-
-            Debug.Log($"[DMCloseDoors] Timer set to {TraderDoorResetIntervalSeconds:0.##} seconds");
-        }
-        catch (Exception ex)
-        {
-            Debug.LogWarning("[DMCloseDoors] Failed to load config: " + ex);
-            ApplyBounds();
-        }
-    }
-
-    private static void ApplyBounds()
-    {
-        if (TraderDoorResetIntervalSeconds < 1f)
-            TraderDoorResetIntervalSeconds = 1f;
-    }
-
-    private static string GetModPath(Mod modInstance)
-    {
-        if (modInstance != null)
-        {
-            var type = modInstance.GetType();
-
-            foreach (var prop in type.GetProperties(AnyInstance))
-            {
-                if (prop.PropertyType == typeof(string))
-                {
-                    try
-                    {
-                        var val = prop.GetValue(modInstance, null) as string;
-                        if (!string.IsNullOrEmpty(val))
-                            return val;
-                    }
-                    catch { }
-                }
-            }
-        }
-
-        return Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? ".";
-    }
-
     public static void ResetTraderDoorsIfOpen(World world)
     {
-        if (world == null)
+        if (!EnableInTraders || world == null)
             return;
 
-        foreach (var traderArea in GetTraderAreas(world))
+        var traderAreas = GetTraderAreas(world).ToList();
+        if (traderAreas.Count == 0)
+            return;
+
+        foreach (var traderArea in traderAreas)
         {
             if (traderArea == null)
                 continue;
 
             try
             {
-                if (IsClosed(traderArea))
+                if (IsTraderAreaClosed(traderArea))
                     continue;
 
-                var setClosed = GetSetClosed(traderArea.GetType());
-                if (setClosed == null)
+                var setClosedMethod = GetSetClosedMethod(traderArea.GetType());
+                if (setClosedMethod == null)
                     continue;
 
-                var trader = GetTrader(traderArea);
+                object traderEntity = GetTraderEntity(traderArea);
 
-                setClosed.Invoke(traderArea, new object[] { world, true, trader, false });
-                setClosed.Invoke(traderArea, new object[] { world, false, trader, false });
+
+                setClosedMethod.Invoke(traderArea, new object[] { world, true, traderEntity, false });
+
+
+                setClosedMethod.Invoke(traderArea, new object[] { world, false, traderEntity, false });
             }
-            catch { }
+            catch (Exception ex)
+            {
+                if (DebugLog)
+                    Debug.LogWarning("[DMCloseDoors] Failed to reset trader doors: " + ex);
+            }
         }
     }
 
-    private static bool IsClosed(object ta)
+    private static bool IsTraderAreaClosed(object traderArea)
     {
-        var t = ta.GetType();
+        if (traderArea == null)
+            return false;
 
-        var prop = t.GetProperty("IsClosed", AnyInstance);
+        var type = traderArea.GetType();
+
+        var prop = type.GetProperty("IsClosed", AnyInstance);
         if (prop != null && prop.PropertyType == typeof(bool))
-            return (bool)prop.GetValue(ta, null);
+        {
+            try
+            {
+                return (bool)prop.GetValue(traderArea, null);
+            }
+            catch
+            {
+            }
+        }
 
-        var field = t.GetField("IsClosed", AnyInstance);
+        var field = type.GetField("IsClosed", AnyInstance);
         if (field != null && field.FieldType == typeof(bool))
-            return (bool)field.GetValue(ta);
+        {
+            try
+            {
+                return (bool)field.GetValue(traderArea);
+            }
+            catch
+            {
+            }
+        }
 
         return false;
     }
 
     private static IEnumerable<object> GetTraderAreas(World world)
     {
-        foreach (var field in world.GetType().GetFields(AnyInstance))
-        {
-            object val;
-            try { val = field.GetValue(world); }
-            catch { continue; }
+        if (world == null)
+            yield break;
 
-            if (val is IEnumerable en)
+        foreach (var obj in EnumeratePossibleContainers(world))
+        {
+            if (obj == null)
+                continue;
+
+            foreach (var traderArea in EnumerateTraderAreasFromObject(obj))
+                yield return traderArea;
+        }
+    }
+
+    private static IEnumerable<object> EnumeratePossibleContainers(World world)
+    {
+        yield return world;
+
+        var gm = GameManager.Instance;
+        if (gm != null)
+            yield return gm;
+    }
+
+    private static IEnumerable<object> EnumerateTraderAreasFromObject(object root)
+    {
+        var yielded = new HashSet<object>();
+
+        foreach (var field in root.GetType().GetFields(AnyInstance))
+        {
+            object value;
+            try
             {
-                foreach (var item in en)
-                {
-                    if (item != null && item.GetType().Name == "TraderArea")
-                        yield return item;
-                }
+                value = field.GetValue(root);
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (var traderArea in ExtractTraderAreas(value))
+            {
+                if (yielded.Add(traderArea))
+                    yield return traderArea;
+            }
+        }
+
+        foreach (var prop in root.GetType().GetProperties(AnyInstance))
+        {
+            if (prop.GetIndexParameters().Length > 0)
+                continue;
+
+            object value;
+            try
+            {
+                value = prop.GetValue(root, null);
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (var traderArea in ExtractTraderAreas(value))
+            {
+                if (yielded.Add(traderArea))
+                    yield return traderArea;
             }
         }
     }
 
-    private static MethodInfo GetSetClosed(Type t)
+    private static IEnumerable<object> ExtractTraderAreas(object value)
     {
-        return t.GetMethods(AnyInstance)
+        if (value == null)
+            yield break;
+
+        var type = value.GetType();
+
+        if (type.Name == "TraderArea")
+        {
+            yield return value;
+            yield break;
+        }
+
+        if (value is IEnumerable enumerable && !(value is string))
+        {
+            foreach (var item in enumerable)
+            {
+                if (item == null)
+                    continue;
+
+                if (item.GetType().Name == "TraderArea")
+                    yield return item;
+            }
+        }
+    }
+
+    private static MethodInfo GetSetClosedMethod(Type traderAreaType)
+    {
+        return traderAreaType
+            .GetMethods(AnyInstance)
             .FirstOrDefault(m =>
             {
-                if (m.Name != "SetClosed") return false;
+                if (m.Name != "SetClosed")
+                    return false;
+
                 var p = m.GetParameters();
-                return p.Length == 4;
+                return p.Length == 4
+                    && p[0].ParameterType == typeof(World)
+                    && p[1].ParameterType == typeof(bool)
+                    && p[3].ParameterType == typeof(bool);
             });
     }
 
-    private static object GetTrader(object ta)
+    private static object GetTraderEntity(object traderArea)
     {
-        var t = ta.GetType();
+        if (traderArea == null)
+            return null;
 
-        foreach (var prop in t.GetProperties(AnyInstance))
+        var type = traderArea.GetType();
+
+        foreach (var propName in new[] { "Trader", "EntityTrader", "owningTrader" })
         {
-            if (typeof(EntityTrader).IsAssignableFrom(prop.PropertyType))
-                return prop.GetValue(ta, null);
+            var prop = type.GetProperty(propName, AnyInstance);
+            if (prop != null && typeof(EntityTrader).IsAssignableFrom(prop.PropertyType))
+            {
+                try
+                {
+                    return prop.GetValue(traderArea, null);
+                }
+                catch
+                {
+                }
+            }
         }
 
-        foreach (var field in t.GetFields(AnyInstance))
+        foreach (var fieldName in new[] { "Trader", "EntityTrader", "owningTrader" })
+        {
+            var field = type.GetField(fieldName, AnyInstance);
+            if (field != null && typeof(EntityTrader).IsAssignableFrom(field.FieldType))
+            {
+                try
+                {
+                    return field.GetValue(traderArea);
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        foreach (var prop in type.GetProperties(AnyInstance))
+        {
+            if (typeof(EntityTrader).IsAssignableFrom(prop.PropertyType) && prop.GetIndexParameters().Length == 0)
+            {
+                try
+                {
+                    return prop.GetValue(traderArea, null);
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        foreach (var field in type.GetFields(AnyInstance))
         {
             if (typeof(EntityTrader).IsAssignableFrom(field.FieldType))
-                return field.GetValue(ta);
+            {
+                try
+                {
+                    return field.GetValue(traderArea);
+                }
+                catch
+                {
+                }
+            }
         }
 
         return null;

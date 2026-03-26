@@ -1,8 +1,8 @@
 ﻿<?xml version="1.0" encoding="UTF-8"?>
 <xml>
-    <Name value="DMCloseDoors" />
-   <DisplayName value="DM Close Doors" />
-    <Description value="Server-side auto-close doors in claims/trader areas." />
+    <Name value="DMAutomaticallyCloseTraderDoors" />
+   <DisplayName value="DM Automatically Close Trader Doors" />
+    <Description value="Dedicated Server-side mod that auto-close doors in claims/trader areas every 5 seconds." />
     <Author value="Darkmushu1" />
     <Version value="1.0.0" />
 </xml>
