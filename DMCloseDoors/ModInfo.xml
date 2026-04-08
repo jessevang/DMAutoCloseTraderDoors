@@ -4,5 +4,5 @@
    <DisplayName value="DM Automatically Close Trader Doors" />
     <Description value="Dedicated Server-side mod that auto-close doors in claims/trader areas every 5 seconds." />
     <Author value="Darkmushu1" />
-    <Version value="1.0.0" />
+    <Version value="1.0.1" />
 </xml>

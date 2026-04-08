@@ -26,7 +26,7 @@ internal class Patch_GameManager_Update
             if (Time.time < _nextRunTime)
                 return;
 
-            _nextRunTime = Time.time + 5f;
+            _nextRunTime = Time.time + DMCloseDoors.ResetIntervalSeconds;
 
             DMCloseDoors.ResetTraderDoorsIfOpen(world);
         }

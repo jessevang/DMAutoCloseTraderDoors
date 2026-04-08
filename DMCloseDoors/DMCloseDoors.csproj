@@ -62,6 +62,7 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="config.xml" />
     <Content Include="ModInfo.xml">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>

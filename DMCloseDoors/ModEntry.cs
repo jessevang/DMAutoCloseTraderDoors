@@ -2,8 +2,10 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Xml;
 using UnityEngine;
 using UnityEngine.Scripting;
 
@@ -13,6 +15,8 @@ public class DMCloseDoors_ModApi : IModApi
     public void InitMod(Mod _modInstance)
     {
         Debug.Log("[DMCloseDoors] InitMod");
+
+        DMCloseDoors.LoadConfig();
 
         var harmony = new Harmony("DMCloseDoors");
         harmony.PatchAll(Assembly.GetExecutingAssembly());
@@ -26,8 +30,52 @@ internal static class DMCloseDoors
     public static bool EnableInTraders = true;
     public static bool DebugLog = false;
 
+    public static float ResetIntervalSeconds = 10f;
+
     private static readonly BindingFlags AnyInstance =
         BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+    public static void LoadConfig()
+    {
+        try
+        {
+            string modFolder = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            string configPath = Path.Combine(modFolder, "config.xml");
+
+            if (!File.Exists(configPath))
+            {
+                Debug.Log("[DMCloseDoors] config.xml not found. Using default ResetIntervalSeconds=10");
+                return;
+            }
+
+            XmlDocument doc = new XmlDocument();
+            doc.Load(configPath);
+
+            XmlNode node = doc.SelectSingleNode("/Config/TraderDoorResetIntervalSeconds");
+            if (node != null)
+            {
+                float parsedValue;
+                if (float.TryParse(node.InnerText, out parsedValue) && parsedValue > 0f)
+                {
+                    ResetIntervalSeconds = parsedValue;
+                }
+                else
+                {
+                    Debug.LogWarning("[DMCloseDoors] Invalid TraderDoorResetIntervalSeconds in config.xml. Using default ResetIntervalSeconds=10");
+                }
+            }
+            else
+            {
+                Debug.Log("[DMCloseDoors] TraderDoorResetIntervalSeconds not found in config.xml. Using default ResetIntervalSeconds=10");
+            }
+
+            Debug.Log("[DMCloseDoors] ResetIntervalSeconds=" + ResetIntervalSeconds);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning("[DMCloseDoors] Failed to load config.xml. Using default ResetIntervalSeconds=10. Error: " + ex);
+        }
+    }
 
     public static void ResetTraderDoorsIfOpen(World world)
     {
@@ -45,8 +93,8 @@ internal static class DMCloseDoors
 
             try
             {
-                if (IsTraderAreaClosed(traderArea))
-                    continue;
+                //if (IsTraderAreaClosed(traderArea))
+                //    continue;
 
                 var setClosedMethod = GetSetClosedMethod(traderArea.GetType());
                 if (setClosedMethod == null)
@@ -54,10 +102,7 @@ internal static class DMCloseDoors
 
                 object traderEntity = GetTraderEntity(traderArea);
 
-
                 setClosedMethod.Invoke(traderArea, new object[] { world, true, traderEntity, false });
-
-
                 setClosedMethod.Invoke(traderArea, new object[] { world, false, traderEntity, false });
             }
             catch (Exception ex)
